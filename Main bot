@@ -1,0 +1,49 @@
+import os
+import telegram
+from telegram.ext import Updater, MessageHandler, Filters
+import openai
+
+# Устанавливаем токен вашего бота Telegram
+TELEGRAM_BOT_TOKEN = 5937084666:AAEf4BgVJeEhkZRApkee1QCNWjGS1jYhA6k
+
+# Устанавливаем токен вашего API OpenAI
+OPENAI_API_KEY = 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
+
+# Устанавливаем модель и движок для OpenAI ChatGPT
+openai.api_key = OPENAI_API_KEY
+model = "text-davinci-003"
+
+# Создаем клиент Telegram бота
+bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
+
+# Функция для ответа на сообщения пользователя
+def reply_to_message(update, context):
+    # Получаем текст сообщения от пользователя
+    user_input = update.message.text
+
+    # Генерируем ответ с помощью модели ChatGPT
+    response = openai.Completion.create(
+        engine=model,
+        prompt=user_input,
+        max_tokens=50
+    )
+
+    # Отправляем ответ пользователю
+    update.message.reply_text(response.choices[0].text.strip())
+
+def main():
+    # Создаем обновлятор Telegram бота
+    updater = Updater(token=TELEGRAM_BOT_TOKEN, use_context=True)
+
+    # Получаем диспетчер для обработки входящих сообщений
+    dispatcher = updater.dispatcher
+
+    # Добавляем обработчик сообщений
+    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, reply_to_message))
+
+    # Запускаем бота
+    updater.start_polling()
+    updater.idle()
+
+if __name__ == '__main__':
+    main()
