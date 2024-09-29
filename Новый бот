@@ -1,0 +1,176 @@
+import openai
+import logging
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
+import pandas as pd
+from io import BytesIO
+
+# Установим уровень логирования
+logging.basicConfig(level=logging.INFO)
+
+# Указан твой API-ключ OpenAI
+openai.api_key = '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'
+
+# Инициализация данных о токенах и состояния активации ChatGPT
+token_data = {}
+chatgpt_active = {}
+
+# Функция для получения количества токенов
+def count_tokens(text):
+    return len(text.split())
+
+# Функция для получения ответа от ChatGPT с использованием OpenAI API
+def get_chatgpt_response(message):
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": message}]
+        )
+        return response.choices[0].message['content'].strip(), response.usage['completion_tokens'], response.usage['prompt_tokens']
+    except Exception as e:
+        logging.error(f"Ошибка при запросе к OpenAI: {e}")
+        return "Извините, произошла ошибка при запросе к ChatGPT.", 0, 0
+
+# Функция, которая будет выполняться, когда бот получает сообщение
+async def handle_message(update: Update, context):
+    user_id = update.message.from_user.id
+    username = update.message.from_user.username
+    user_message = update.message.text
+
+    # Проверка, активирована ли команда /chatgpt
+    if not chatgpt_active.get(user_id, False):
+        await update.message.reply_text("рустем даунчоус. Чтобы воспользоваться ботом, введите /chatgpt")
+        return
+
+    logging.info(f"Получено сообщение от {username}: {user_message}")
+
+    chatgpt_response, completion_tokens, prompt_tokens = get_chatgpt_response(user_message)
+
+    # Отслеживание токенов и символов
+    outgoing_tokens = count_tokens(chatgpt_response)
+    incoming_tokens = count_tokens(user_message)
+    
+    if user_id not in token_data:
+        token_data[user_id] = {
+            "username": username,
+            "total_incoming_tokens": 0,
+            "total_outgoing_tokens": 0,
+            "total_incoming_chars": 0,
+            "total_outgoing_chars": 0,
+            "history": []
+        }
+
+    token_data[user_id]['total_incoming_tokens'] += incoming_tokens
+    token_data[user_id]['total_outgoing_tokens'] += outgoing_tokens
+    token_data[user_id]['total_incoming_chars'] += len(user_message)
+    token_data[user_id]['total_outgoing_chars'] += len(chatgpt_response)
+    
+    # Записываем в историю
+    token_data[user_id]['history'].append({
+        "date": update.message.date,
+        "user_message": user_message,
+        "response_message": chatgpt_response,
+        "incoming_tokens": incoming_tokens,
+        "outgoing_tokens": outgoing_tokens,
+        "incoming_chars": len(user_message),
+        "outgoing_chars": len(chatgpt_response)
+    })
+    
+    await update.message.reply_text(chatgpt_response)
+
+# Основная функция для запуска бота
+async def start(update: Update, context):
+    await update.message.reply_text('Привет! Чтобы воспользоваться ботом, введите /chatgpt')
+
+# Команда для вывода информации о токенах для пользователя
+async def token_info(update: Update, context):
+    user_id = update.message.from_user.id
+    if user_id in token_data:
+        data = token_data[user_id]
+        await update.message.reply_text(
+            f"Всего входящих токенов: {data['total_incoming_tokens']}\n"
+            f"Всего исходящих токенов: {data['total_outgoing_tokens']}\n"
+            f"Всего символов в запросах: {data['total_incoming_chars']}\n"
+            f"Всего символов в ответах: {data['total_outgoing_chars']}"
+        )
+    else:
+        await update.message.reply_text("Данные по токенам отсутствуют.")
+
+# Команда для администратора для создания и отправки отчета в Excel
+async def download_report(update: Update, context):
+    user_id = update.message.from_user.id
+    if user_id == 'your_admin_id':  # Замените 'your_admin_id' на настоящий ID администратора
+        # Формируем отчет в Excel
+        report_data = []
+        for user_id, data in token_data.items():
+            for record in data['history']:
+                report_data.append([
+                    user_id,
+                    record["date"],
+                    data["username"],
+                    record["incoming_tokens"],
+                    record["outgoing_tokens"],
+                    len(record["user_message"].split()),
+                    len(record["response_message"].split())
+                ])
+        
+        df = pd.DataFrame(report_data, columns=["ID TG", "Дата", "Пользователь", "Исходящие токены", "Входящие токены", "Слова в запросе", "Слова в ответе"])
+        
+        # Сохраняем в BytesIO объект для отправки в виде файла
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            df.to_excel(writer, index=False)
+        output.seek(0)
+
+        # Отправляем файл
+        await context.bot.send_document(chat_id=update.message.chat_id, document=output, filename="token_report.xlsx")
+    else:
+        await update.message.reply_text("У вас нет прав для использования этой команды.")
+
+# Команда \chatgpt для активации общения с ботом
+async def chatgpt_start(update: Update, context):
+    user_id = update.message.from_user.id
+    chatgpt_active[user_id] = True
+    await update.message.reply_text("Отлично, давайте пообщаемся!")
+
+# Команда /help для показа списка команд
+async def help_command(update: Update, context):
+    help_text = (
+        "/start - Запустить бота.\n"
+        "/chatgpt - Активировать общение с ChatGPT.\n"
+        "/token - Показать статистику по токенам и символам за все время.\n"
+        "/help - Показать это сообщение.\n"
+        "/download_report - (только для админа) Скачать отчет о токенах в формате Excel."
+    )
+    await update.message.reply_text(help_text)
+
+if __name__ == '__main__':
+    # Указан твой токен Telegram от BotFather
+    application = ApplicationBuilder().token('7837907755:AAHbDNHGftEt9vC5XzUebVW6FJ_Q00CnxNI').build()
+
+    # Увеличиваем тайм-аут до 10 секунд
+    application.bot.request.timeout = 10
+
+    # Логируем успешный запуск бота
+    logging.info("Бот запущен и ожидает сообщений")
+
+    # Обрабатываем команду /start
+    application.add_handler(CommandHandler('start', start))
+
+    # Обрабатываем команду /token
+    application.add_handler(CommandHandler('token', token_info))
+
+    # Обрабатываем команду /download_report (для администратора)
+    application.add_handler(CommandHandler('download_report', download_report))
+
+    # Обрабатываем команду /chatgpt
+    application.add_handler(CommandHandler('chatgpt', chatgpt_start))
+
+    # Обрабатываем команду /help
+    application.add_handler(CommandHandler('help', help_command))
+
+    # Обрабатываем текстовые сообщения (если /chatgpt не активирован, бот возвращает фиксированное сообщение)
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    # Запускаем бота
+    application.run_polling()
